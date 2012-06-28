@@ -6,8 +6,8 @@ from optparse import OptionParser
     
 def visualize(centers, corners, edges):
     from meshtool.filters.panda_filters.pandacore import getVertexData, attachLights, ensureCameraAt
-    from meshtool.filters.panda_filters.pandacontrols import KeyboardMovement, MouseDrag, MouseScaleZoom
-    from panda3d.core import GeomPoints, GeomTriangles, Geom, GeomNode, GeomVertexFormat, GeomVertexData, GeomVertexWriter, LineSegs
+    from meshtool.filters.panda_filters.pandacontrols import KeyboardMovement, MouseDrag, MouseScaleZoom, MouseCamera
+    from panda3d.core import GeomPoints, GeomTriangles, Geom, GeomNode, GeomVertexFormat, GeomVertexData, GeomVertexWriter, LineSegs, VBase3
     from direct.showbase.ShowBase import ShowBase
     
     format = GeomVertexFormat.getV3c4()
@@ -72,8 +72,11 @@ def visualize(centers, corners, edges):
 
     base.cam.lookAt(boundingSphere.getCenter())
     
+    geomPath.setScale(VBase3(50,50,50))
+    
     KeyboardMovement()
-    MouseDrag(geomPath)
+    #MouseDrag(geomPath)
+    MouseCamera()
     MouseScaleZoom(geomPath)
     #render.setShaderAuto()
     p3dApp.run()

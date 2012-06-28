@@ -148,6 +148,11 @@ class MapGenXml(object):
         for center in self.centers.itervalues():
             center.add_pointers(self.corners, self.edges)
 
+    def __str__(self):
+        return '<MapGenXml with %d centers, %d corners, and %d edges>' % (len(self.centers), len(self.corners), len(self.edges))
+    def __repr__(self):
+        return str(self)
+
     def print_info(self):
         sys.stdout.write("Generated map file created on '%s' via URL '%s'.\n" % (self.time_generated, self.generated_url))
         sys.stdout.write("Found %d centers.\n" % len(self.centers))
