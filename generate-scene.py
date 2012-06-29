@@ -11,6 +11,7 @@ from mapgen2 import Z_SCALE
 from optparse import OptionParser
 from meshtool.filters.print_filters.print_bounds import getBoundsInfo, v3dist
 from panda3d.core import Vec3, Quat
+from clint.textui import progress
 
 import open3dhub
 
@@ -31,16 +32,17 @@ def get_tag_type(tag):
 
 def get_models():
     model_types = {
-        'houses': get_tag_type('house'),
-        'trees': get_tag_type('tree'),
-        'lawn': get_tag_type('lawn'),
+        #'houses': get_tag_type('house'),
+        #'trees': get_tag_type('tree'),
+        #'lawn': get_tag_type('lawn'),
         'flying': get_tag_type('flying'),
-        'street': get_tag_type('street'),
-        'underwater': get_tag_type('underwater'),
-        'winter': get_tag_type('winter'),
-        'vehicle': get_tag_type('vehicle'),
-        'building': get_tag_type('building'),
-        'roads': get_tag_type('road'),
+        'boats': get_tag_type('boat'),
+        #'street': get_tag_type('street'),
+        #'underwater': get_tag_type('underwater'),
+        #'winter': get_tag_type('winter'),
+        #'vehicle': get_tag_type('vehicle'),
+        #'building': get_tag_type('building'),
+        #'roads': get_tag_type('road'),
     }
     return model_types
 
@@ -67,7 +69,7 @@ def height_offset(boundsInfo):
     return height_range / 2.0
 
 class SceneModel(object):
-    def __init__(self, path, x, y, z, scale):
+    def __init__(self, path, x, y, z, scale, model_type):
         self.path = path
         
         self.x = x
@@ -75,6 +77,7 @@ class SceneModel(object):
         self.z = z
         
         self.scale = scale
+        self.model_type = model_type
         
         self.orient_x = 0
         self.orient_y = 0
@@ -132,6 +135,7 @@ class SceneModel(object):
             'orient_z': -1.0 * self.orient_y,
             'orient_w': self.orient_w,
             'scale': self.scale,
+            'type': self.model_type,
         }
 
 def mapgen_coords_to_sirikata(loc, terrain):
@@ -145,38 +149,9 @@ def mapgen_coords_to_sirikata(loc, terrain):
     loc[2] += height_offset(terrain.boundsInfo) * terrain.scale
     return loc
 
-def main():
-    parser = OptionParser(usage="Usage: generate-scene.py -o scene.json map.xml",
-                          description="Generates a JSON scene based on mapgen2 XML output, using meshes from open3dhub")
-    parser.add_option("-o", "--outname", dest="outname",
-                      help="write JSON scene to {outname}.json and Emerson script to {outname}.em", metavar="OUTNAME")
-    (options, args) = parser.parse_args()
-    
-    if len(args) != 1:
-        parser.print_help()
-        parser.exit(1, "Wrong number of arguments.\n")
-    
-    if not os.path.isfile(args[0]):
-        parser.print_help()
-        parser.exit(1, "Input file '%s' is not a valid file.\n" % args[0])
-    
-    if options.outname is None:
-        parser.print_help()
-        parser.exit(1, "Must specify an output name.\n")
-        
-    fname = args[0]
-    map = MapGenXml(fname)
-    
-    
-    terrain = SceneModel(TERRAIN_PATH, x=0, y=0, z=0, scale=1000)
-    json_out = []
-    print 'Generated (1) terrain object'
-    json_out.append(terrain.to_json())
-    
-    #models = get_models()
-    
+def generate_roads(models, terrain, map, json_out):
     numroads = 0
-    for center in map.centers.itervalues():
+    for center in progress.bar(map.centers.values(), label='Generating roads... '):
         road_edges = [e for e in center.edges if e.is_road and e.corner0 is not None and e.corner1 is not None]
         if len(road_edges) != 2:
             continue
@@ -201,7 +176,8 @@ def main():
                        x=float(midpt[0]),
                        y=float(midpt[1]),
                        z=float(midpt[2]) + 5,
-                       scale=scale)
+                       scale=scale,
+                       model_type='road')
         
         kataboundmin, kataboundmax = sirikata_bounds(m.boundsInfo)
         scenemin = kataboundmin * scale + midpt
@@ -230,13 +206,94 @@ def main():
         json_out.append(m.to_json())
     
     print 'Generated (%d) road objects' % numroads
+
+def generate_flying(models, terrain, map, json_out):
+    terrain_bounds = sirikata_bounds(terrain.boundsInfo)
+    minpt, maxpt = terrain_bounds
+    minpt *= terrain.scale
+    maxpt *= terrain.scale
+    height_max = (maxpt[2] - minpt[2]) * 1.20
     
-    #c1 = next(map.centers.itervalues())
-    #center_loc = numpy.array([c1.x, c1.y, c1.elevation], dtype=numpy.float32)
-    #center_loc = mapgen_coords_to_sirikata(center_loc, terrain)
+    flying_models = models['flying'] + models['flying']
+    centers = map.centers.values()
+    random.shuffle(centers)
+    centers = centers[:len(flying_models)]
+    for center, flying_model in progress.bar(zip(centers, flying_models), label='Generating flying objects... '):
+        center_pt = numpy.array([center.x, center.y, center.elevation * Z_SCALE], dtype=numpy.float32)
+        center_pt = mapgen_coords_to_sirikata(center_pt, terrain)
+
+        rand_height = random.uniform(center_pt[2], height_max) * 1.10
+        
+        m = SceneModel(flying_model['full_path'],
+                       x=float(center_pt[0]),
+                       y=float(center_pt[1]),
+                       z=rand_height,
+                       scale=random.uniform(1.0, 8.0),
+                       model_type='flying')
+        json_out.append(m.to_json())
+    print 'Generated (%d) flying objects' % len(flying_models)
+
+def generate_boats(models, terrain, map, json_out):
+    boats = models['boats']
+    oceans = [c for c in map.centers.values() if c.biome == 'OCEAN']
+    lakes = [c for c in map.centers.values() if c.biome == 'LAKE']
+    random.shuffle(lakes)
+    random.shuffle(oceans)
     
-    #building_path = models['building'][0]['full_path']
-    #building = SceneModel(building_path, x=float(center_loc[0]), y=float(center_loc[1]), z=float(center_loc[2]), scale=50)
+    lakes = lakes[:len(boats)]
+    oceans = oceans[:len(boats)*2]
+    centers = oceans + lakes
+    boats = boats + boats + boats
+    
+    for center, boat_model in progress.bar(zip(centers, boats), label='Generating boats...'):
+        center_pt = numpy.array([center.x, center.y, center.elevation * Z_SCALE], dtype=numpy.float32)
+        center_pt = mapgen_coords_to_sirikata(center_pt, terrain)
+        scale = random.uniform(1.0, 4.0)
+        
+        m = SceneModel(boat_model['full_path'],
+                       x=float(center_pt[0]),
+                       y=float(center_pt[1]),
+                       z=float(center_pt[2]) - scale * 2 * 0.1,
+                       scale=scale,
+                       model_type='boat')
+        
+        json_out.append(m.to_json())
+    
+    print 'Generated (%d) boat objects' % len(boats)
+
+def main():
+    parser = OptionParser(usage="Usage: generate-scene.py -o scene.json map.xml",
+                          description="Generates a JSON scene based on mapgen2 XML output, using meshes from open3dhub")
+    parser.add_option("-o", "--outname", dest="outname",
+                      help="write JSON scene to {outname}.json and Emerson script to {outname}.em", metavar="OUTNAME")
+    (options, args) = parser.parse_args()
+    
+    if len(args) != 1:
+        parser.print_help()
+        parser.exit(1, "Wrong number of arguments.\n")
+    
+    if not os.path.isfile(args[0]):
+        parser.print_help()
+        parser.exit(1, "Input file '%s' is not a valid file.\n" % args[0])
+    
+    if options.outname is None:
+        parser.print_help()
+        parser.exit(1, "Must specify an output name.\n")
+        
+    fname = args[0]
+    map = MapGenXml(fname)
+    import pprint; pprint.pprint(set(c.biome for c in map.centers.values()))
+    sys.exit(0)
+    models = get_models()
+    
+    terrain = SceneModel(TERRAIN_PATH, x=0, y=0, z=0, scale=1000, model_type='terrain')
+    json_out = []
+    print 'Generated (1) terrain object'
+    json_out.append(terrain.to_json())
+    
+    generate_roads(models, terrain, map, json_out)
+    generate_flying(models, terrain, map, json_out)
+    generate_boats(models, terrain, map, json_out)
     
     json_str = json.dumps(json_out, indent=2)
     
