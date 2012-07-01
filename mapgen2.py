@@ -5,7 +5,7 @@ from xml.etree import ElementTree as etree
 
 X_SCALE = 1.0
 Y_SCALE = 1.0
-Z_SCALE = 100.0
+Z_SCALE = 30.0
 
 COLORS = {
     # Features
