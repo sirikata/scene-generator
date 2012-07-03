@@ -6,16 +6,18 @@ import json
 import math
 import numpy
 import random
+import collada
 from mapgen2 import MapGenXml
 from mapgen2 import Z_SCALE
 from optparse import OptionParser
 from meshtool.filters.print_filters.print_bounds import getBoundsInfo, v3dist
 from panda3d.core import Vec3, Quat
 from clint.textui import progress
+from collada.util import normalize_v3
 
 import open3dhub
 
-TERRAIN_PATH = '/jterrace/mapgen_terrain_1.dae/0'
+TERRAIN_PATH = '/jterrace/terrain.dae/0'
 ROAD_PATH = '/kittyvision/street.dae/0'
 
 def v3mid(pt1, pt2):
@@ -37,6 +39,7 @@ def get_models():
         #'lawn': get_tag_type('lawn'),
         'flying': get_tag_type('flying'),
         'boats': get_tag_type('boat'),
+        'winter': get_tag_type('winter'),
         #'street': get_tag_type('street'),
         #'underwater': get_tag_type('underwater'),
         #'winter': get_tag_type('winter'),
@@ -149,6 +152,11 @@ def mapgen_coords_to_sirikata(loc, terrain):
     loc[2] += height_offset(terrain.boundsInfo) * terrain.scale
     return loc
 
+def normal_vector(a, b, c):
+    direction = numpy.cross(b - a, c - a)
+    normalize_v3(direction[None, :])
+    return direction
+
 def generate_roads(models, terrain, map, json_out):
     numroads = 0
     for center in progress.bar(map.centers.values(), label='Generating roads... '):
@@ -159,51 +167,70 @@ def generate_roads(models, terrain, map, json_out):
         e1, e2 = road_edges
         e1_0 = numpy.array([e1.corner0.x, e1.corner0.y, e1.corner0.elevation * Z_SCALE], dtype=numpy.float32)
         e1_1 = numpy.array([e1.corner1.x, e1.corner1.y, e1.corner1.elevation * Z_SCALE], dtype=numpy.float32)
-        e1_mid = v3mid(e1_0, e1_1)
         e2_0 = numpy.array([e2.corner0.x, e2.corner0.y, e2.corner0.elevation * Z_SCALE], dtype=numpy.float32)
         e2_1 = numpy.array([e2.corner1.x, e2.corner1.y, e2.corner1.elevation * Z_SCALE], dtype=numpy.float32)
-        e2_mid = v3mid(e2_0, e2_1)
         
-        midpt = v3mid(e1_mid, e2_mid)
-        midpt = mapgen_coords_to_sirikata(midpt, terrain)
+        region_center = numpy.array([center.x, center.y, center.elevation * Z_SCALE])
         
-        kata_pt1 = mapgen_coords_to_sirikata(e1_mid, terrain)
-        kata_pt2 = mapgen_coords_to_sirikata(e2_mid, terrain)
-        
-        scale = v3dist(kata_pt1, kata_pt2) / 2
-        
-        m = SceneModel(ROAD_PATH,
-                       x=float(midpt[0]),
-                       y=float(midpt[1]),
-                       z=float(midpt[2]) + 5,
-                       scale=scale,
-                       model_type='road')
-        
-        kataboundmin, kataboundmax = sirikata_bounds(m.boundsInfo)
-        scenemin = kataboundmin * scale + midpt
-        scenemax = kataboundmax * scale + midpt
-        xmid = (scenemax[0] - scenemin[0]) / 2.0 + scenemin[0]
-        road_edge1 = numpy.array([xmid, scenemin[1], scenemin[2]], dtype=numpy.float32)
-        road_edge2 = numpy.array([xmid, scenemax[1], scenemin[2]], dtype=numpy.float32)
-        
-        midv3 = Vec3(midpt[0], midpt[1], midpt[2])
-        src = Vec3(road_edge2[0], road_edge2[1], road_edge2[2])
-        src -= midv3
-        src_copy = Vec3(src)
-        target = Vec3(kata_pt1[0], kata_pt1[1], kata_pt1[2])
-        target -= midv3
-        cross = src.cross(target)
-        w = math.sqrt(src.lengthSquared() * target.lengthSquared()) + src.dot(target)
-        q = Quat(w, cross)
-        q.normalize()
-        
-        m.orient_x = q.getI()
-        m.orient_y = q.getJ()
-        m.orient_z = q.getK()
-        m.orient_w = q.getR()
-        
-        numroads += 1
-        json_out.append(m.to_json())
+        for end1, edge1, edge2 in [(region_center, e1_0, e1_1), (region_center, e2_0, e2_1)]:
+            end2 = v3mid(edge1, edge2)
+            
+            midpt = v3mid(end1, end2)
+            midpt = mapgen_coords_to_sirikata(midpt, terrain)
+            
+            kata_pt1 = mapgen_coords_to_sirikata(end1, terrain)
+            kata_pt2 = mapgen_coords_to_sirikata(end2, terrain)
+            
+            scale = v3dist(kata_pt1, kata_pt2) / 2
+            
+            m = SceneModel(ROAD_PATH,
+                           x=float(midpt[0]),
+                           y=float(midpt[1]),
+                           z=float(midpt[2]),
+                           scale=scale,
+                           model_type='road')
+            
+            kataboundmin, kataboundmax = sirikata_bounds(m.boundsInfo)
+            scenemin = kataboundmin * scale + midpt
+            scenemax = kataboundmax * scale + midpt
+            xmid = (scenemax[0] - scenemin[0]) / 2.0 + scenemin[0]
+            road_edge1 = numpy.array([xmid, scenemin[1], scenemin[2]], dtype=numpy.float32)
+            road_edge2 = numpy.array([xmid, scenemax[1], scenemin[2]], dtype=numpy.float32)
+            
+            midv3 = Vec3(midpt[0], midpt[1], midpt[2])
+            src = Vec3(road_edge2[0], road_edge2[1], road_edge2[2])
+            src -= midv3
+            src_copy = Vec3(src)
+            target = Vec3(kata_pt1[0], kata_pt1[1], kata_pt1[2])
+            target -= midv3
+            cross = src.cross(target)
+            w = math.sqrt(src.lengthSquared() * target.lengthSquared()) + src.dot(target)
+            q = Quat(w, cross)
+            q.normalize()
+            
+            orig_up = q.getUp()
+            orig_up.normalize()
+            
+            edge1_kata = mapgen_coords_to_sirikata(edge1, terrain)
+            edge2_kata = mapgen_coords_to_sirikata(edge2, terrain)
+            new_up = normal_vector(kata_pt1, edge1_kata, edge2_kata)
+            new_up = Vec3(new_up[0], new_up[1], new_up[2])
+            rotate_about = orig_up.cross(new_up)
+            rotate_about.normalize()
+            angle_between = orig_up.angleDeg(new_up)
+            r = Quat()
+            r.setFromAxisAngle(angle_between, rotate_about)
+            r.normalize()
+            q *= r
+            q.normalize()
+            
+            m.orient_x = q.getI()
+            m.orient_y = q.getJ()
+            m.orient_z = q.getK()
+            m.orient_w = q.getR()
+            
+            numroads += 1
+            json_out.append(m.to_json())
     
     print 'Generated (%d) road objects' % numroads
 
@@ -214,7 +241,7 @@ def generate_flying(models, terrain, map, json_out):
     maxpt *= terrain.scale
     height_max = (maxpt[2] - minpt[2]) * 1.20
     
-    flying_models = models['flying'] + models['flying']
+    flying_models = models['flying']
     centers = map.centers.values()
     random.shuffle(centers)
     centers = centers[:len(flying_models)]
@@ -248,12 +275,12 @@ def generate_boats(models, terrain, map, json_out):
     for center, boat_model in progress.bar(zip(centers, boats), label='Generating boats...'):
         center_pt = numpy.array([center.x, center.y, center.elevation * Z_SCALE], dtype=numpy.float32)
         center_pt = mapgen_coords_to_sirikata(center_pt, terrain)
-        scale = random.uniform(1.0, 4.0)
+        scale = random.uniform(5.0, 15.0)
         
         m = SceneModel(boat_model['full_path'],
                        x=float(center_pt[0]),
                        y=float(center_pt[1]),
-                       z=float(center_pt[2]) - scale * 2 * 0.1,
+                       z=float(center_pt[2]) - scale * 2 * 0.05,
                        scale=scale,
                        model_type='boat')
         
@@ -261,8 +288,32 @@ def generate_boats(models, terrain, map, json_out):
     
     print 'Generated (%d) boat objects' % len(boats)
 
+def generate_winter(models, terrain, map, json_out):
+    winter = models['winter']
+    snow = [c for c in map.centers.values() if c.biome == 'SNOW']
+    random.shuffle(snow)
+    
+    winter = winter + winter
+    snow = snow[:len(winter)]
+    
+    for center, winter_model in progress.bar(zip(snow, winter), label='Generating winter objects...'):
+        center_pt = numpy.array([center.x, center.y, center.elevation * Z_SCALE], dtype=numpy.float32)
+        center_pt = mapgen_coords_to_sirikata(center_pt, terrain)
+        scale = random.uniform(3.0, 10.0)
+        
+        m = SceneModel(winter_model['full_path'],
+                       x=float(center_pt[0]),
+                       y=float(center_pt[1]),
+                       z=float(center_pt[2]),
+                       scale=scale,
+                       model_type='winter')
+        
+        json_out.append(m.to_json())
+    
+    print 'Generated (%d) winter objects' % len(winter)
+
 def main():
-    parser = OptionParser(usage="Usage: generate-scene.py -o scene.json map.xml",
+    parser = OptionParser(usage="Usage: generate-scene.py -o scene map.xml",
                           description="Generates a JSON scene based on mapgen2 XML output, using meshes from open3dhub")
     parser.add_option("-o", "--outname", dest="outname",
                       help="write JSON scene to {outname}.json and Emerson script to {outname}.em", metavar="OUTNAME")
@@ -282,8 +333,6 @@ def main():
         
     fname = args[0]
     map = MapGenXml(fname)
-    import pprint; pprint.pprint(set(c.biome for c in map.centers.values()))
-    sys.exit(0)
     models = get_models()
     
     terrain = SceneModel(TERRAIN_PATH, x=0, y=0, z=0, scale=1000, model_type='terrain')
@@ -291,6 +340,7 @@ def main():
     print 'Generated (1) terrain object'
     json_out.append(terrain.to_json())
     
+    generate_winter(models, terrain, map, json_out)
     generate_roads(models, terrain, map, json_out)
     generate_flying(models, terrain, map, json_out)
     generate_boats(models, terrain, map, json_out)
