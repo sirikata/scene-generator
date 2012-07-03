@@ -34,19 +34,26 @@ def get_tag_type(tag):
 
 def get_models():
     model_types = {
-        #'houses': get_tag_type('house'),
-        #'trees': get_tag_type('tree'),
+        'houses': get_tag_type('house'),
+        'trees': get_tag_type('tree'),
+        'plants': get_tag_type('plant'),
         #'lawn': get_tag_type('lawn'),
         'flying': get_tag_type('flying'),
         'boats': get_tag_type('boat'),
         'winter': get_tag_type('winter'),
         #'street': get_tag_type('street'),
         #'underwater': get_tag_type('underwater'),
-        #'winter': get_tag_type('winter'),
-        #'vehicle': get_tag_type('vehicle'),
-        #'building': get_tag_type('building'),
+        'vehicles': get_tag_type('vehicle'),
+        'buildings': get_tag_type('building'),
         #'roads': get_tag_type('road'),
     }
+    
+    trees = set(m['full_path'] for m in model_types['trees'])
+    model_types['shrubs'] = [m for m in model_types['plants'] if m['full_path'] not in trees]
+    
+    houses = set(m['full_path'] for m in model_types['houses'])
+    model_types['commercial_buildings'] = [m for m in model_types['buildings'] if m['full_path'] not in houses]
+    
     return model_types
 
 def sirikata_bounds(boundsInfo):
@@ -72,7 +79,8 @@ def height_offset(boundsInfo):
     return height_range / 2.0
 
 class SceneModel(object):
-    def __init__(self, path, x, y, z, scale, model_type):
+    def __init__(self, path, x, y, z, scale, model_type,
+                 orient_x=0, orient_y=0, orient_z=0, orient_w=1):
         self.path = path
         
         self.x = x
@@ -82,10 +90,10 @@ class SceneModel(object):
         self.scale = scale
         self.model_type = model_type
         
-        self.orient_x = 0
-        self.orient_y = 0
-        self.orient_z = 0
-        self.orient_w = 1
+        self.orient_x = orient_x
+        self.orient_y = orient_y
+        self.orient_z = orient_z
+        self.orient_w = orient_w
         
         self._metadata = None
         self._mesh = None
@@ -312,6 +320,33 @@ def generate_winter(models, terrain, map, json_out):
     
     print 'Generated (%d) winter objects' % len(winter)
 
+def generate_vehicles(models, terrain, map, json_out):
+    vehicles = models['vehicles']
+    vehicles = vehicles + vehicles
+    roads = [j for j in json_out if j['type'] == 'road']
+    random.shuffle(roads)
+    roads = roads[:len(vehicles)]
+    
+    for road, vehicle_model in progress.bar(zip(roads, vehicles), label='Generating vehicles...'):
+        road_pt = numpy.array([road['x'], -1 * road['z'], road['y']], dtype=numpy.float32)
+        
+        scale = random.uniform(1.0, 3.0)
+        
+        m = SceneModel(vehicle_model['full_path'],
+                       x=float(road_pt[0]),
+                       y=float(road_pt[1]),
+                       z=float(road_pt[2]),
+                       scale=scale,
+                       model_type='vehicle',
+                       orient_x=road['orient_x'],
+                       orient_y=-1 * road['orient_z'],
+                       orient_z=road['orient_y'],
+                       orient_w=road['orient_w'])
+        
+        json_out.append(m.to_json())
+        
+    print 'Generated (%d) vehicles' % len(vehicles)
+
 def main():
     parser = OptionParser(usage="Usage: generate-scene.py -o scene map.xml",
                           description="Generates a JSON scene based on mapgen2 XML output, using meshes from open3dhub")
@@ -342,6 +377,7 @@ def main():
     
     generate_winter(models, terrain, map, json_out)
     generate_roads(models, terrain, map, json_out)
+    generate_vehicles(models, terrain, map, json_out)
     generate_flying(models, terrain, map, json_out)
     generate_boats(models, terrain, map, json_out)
     
@@ -356,9 +392,6 @@ def main():
         f.write('var OBJECTS = ')
         f.write(json_str)
         f.write(';\n')
-    
-    #dae = tocollada(map.centers, map.corners, map.edges)
-    #dae.write(options.outfile)
 
 if __name__ == '__main__':
     main()
