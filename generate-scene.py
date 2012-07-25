@@ -7,6 +7,7 @@ import math
 import numpy
 import random
 import collada
+import shelve
 from mapgen2 import MapGenXml
 from mapgen2 import Z_SCALE
 from optparse import OptionParser
@@ -14,11 +15,15 @@ from meshtool.filters.print_filters.print_bounds import getBoundsInfo, v3dist
 from panda3d.core import Vec3, Quat
 from clint.textui import progress
 from collada.util import normalize_v3
+import poisson_disk
 
 import open3dhub
 
 TERRAIN_PATH = '/jterrace/terrain.dae/0'
 ROAD_PATH = '/kittyvision/street.dae/0'
+
+CACHE = '.cache'
+SHELF = shelve.open(CACHE)
 
 def v3mid(pt1, pt2):
     return numpy.array([(pt1[0] + pt2[0]) / 2.0,
@@ -28,7 +33,11 @@ def v3mid(pt1, pt2):
 
 def get_tag_type(tag):
     print 'Finding tag "%s"...' % tag,
-    L = open3dhub.get_search_list('tags:"%s"' % tag)
+    tagkey = "TAG_" + str(tag)
+    if tagkey not in SHELF:
+        print 'getting list for', tag
+        SHELF[tagkey] = open3dhub.get_search_list('tags:"%s"' % tag)
+    L = SHELF[tagkey]
     print 'received %d' % len(L)
     return L
 
@@ -110,14 +119,23 @@ class SceneModel(object):
     mesh = property(_get_mesh)
     
     def _get_metadata(self):
-        self._load_mesh()
+        if self._metadata is None:
+            key = 'METADATA_' + str(self.path)
+            if key in SHELF:
+                self._metadata = SHELF[key]
+            else:
+                self._load_mesh()
+                SHELF[key] = self._metadata
         return self._metadata
 
     metadata = property(_get_metadata)
     
     def _get_bounds_info(self):
         if self._boundsInfo is None:
-            self._boundsInfo = getBoundsInfo(self.mesh)
+            pathkey = 'BOUNDS_' + str(self.path)
+            if pathkey not in SHELF:
+                SHELF[pathkey] = getBoundsInfo(self.mesh)
+            self._boundsInfo = SHELF[pathkey]
         return self._boundsInfo
     
     boundsInfo = property(_get_bounds_info)
@@ -347,6 +365,244 @@ def generate_vehicles(models, terrain, map, json_out):
         
     print 'Generated (%d) vehicles' % len(vehicles)
 
+def plane_from_points(v1, v2, v3):
+    """Computes the best fit plane through a set of points.
+    
+    Returns
+      (n, d) where n in the normal of the plane, d is the scalar offset
+    """
+    
+    vec1 = v1 - v2
+    vec2 = v1 - v3
+    norm = numpy.cross(vec1, vec2)
+    d = numpy.dot(norm, v3)
+    return (norm, d)
+
+def iterate_poisson_samples(centers, map, name, radius, num_samples):
+    for center in progress.bar(centers, label='Generating %s...' % name):
+        
+        tris = []
+        for edge in center.edges:
+            corner0 = edge.corner0
+            corner1 = edge.corner1
+            center0 = edge.center0
+            center1 = edge.center1
+            if corner0 is None or corner1 is None:
+                continue
+            
+            if center.id == center0.id:
+                v1 = map.corners[corner1.id]
+                v2 = map.corners[corner0.id]
+                v3 = map.centers[center0.id]
+            elif center.id == center1.id:
+                v1 = map.centers[center1.id]
+                v2 = map.corners[corner0.id]
+                v3 = map.corners[corner1.id]
+            else:
+                continue
+            
+            tris.append((v1, v2, v3))
+            
+        for tri in tris:
+            minx = min([v.x for v in tri])
+            miny = min([v.y for v in tri])
+            maxx = max([v.x for v in tri])
+            maxy = max([v.y for v in tri])
+            width = int(maxx - minx)
+            height = int(maxy - miny)
+            
+            samples = poisson_disk.sample_poisson_uniform(width, height, radius, num_samples)
+            samples = [(x+minx, y+miny) for x,y in samples]
+
+            random.shuffle(samples)
+            samples = samples[:num_samples]
+            
+            pts = numpy.array([(v.x, v.y, v.elevation * Z_SCALE) for v in tri], dtype=numpy.float32)
+            n, d = plane_from_points(*pts)
+            a, b, c = n
+            for x,y in samples:
+                # ax + by + cz = d
+                # z = (d - ax - by)/c
+                z = (d - a*x - b*y) / c
+                
+                yield (x, y, z)
+
+def generate_forest(centers, models, terrain, map, json_out, name, radius, num_samples):
+    trees = models['trees']
+    
+    # for testing
+    # trees = [t for t in trees if 'jterrace/palm.dae' in t['full_path']]
+    # assert len(trees) == 1
+
+    num_gen = 0 
+    for x, y, z in iterate_poisson_samples(centers, map, name, radius, num_samples):
+        pt = numpy.array([x,y,z], dtype=numpy.float32)
+        pt = mapgen_coords_to_sirikata(pt, terrain)
+        
+        scale = random.uniform(3.0, 10.0)
+        
+        m = SceneModel(random.choice(trees)['full_path'],
+                       x=float(pt[0]),
+                       y=float(pt[1]),
+                       z=float(pt[2]),
+                       scale=scale,
+                       model_type='tree')
+        
+        json_out.append(m.to_json())
+        num_gen += 1
+                
+    print 'Generated (%d) %s' % (num_gen, name)
+
+def generate_dense_forest(centers, models, terrain, map, json_out):
+    generate_forest(centers, models, terrain, map, json_out, 'Dense Forest', 2, 6)
+
+def generate_sparse_forest(centers, models, terrain, map, json_out):
+    generate_forest(centers, models, terrain, map, json_out, 'Sparse Forest', 10, 1)
+
+def overlaps(bounds1, bounds2):
+    MAX = 1
+    MIN = 0
+    X = 0
+    Y = 1
+    Z = 2
+    
+    if bounds1[MAX][X] < bounds2[MIN][X]:
+        return False
+    if bounds1[MAX][Y] < bounds2[MIN][Y]:
+        return False
+    if bounds1[MAX][Z] < bounds2[MIN][Z]:
+        return False
+    
+    if bounds1[MIN][X] > bounds2[MAX][X]:
+        return False
+    if bounds1[MIN][Y] > bounds2[MAX][Y]:
+        return False
+    if bounds1[MIN][Z] > bounds2[MAX][Z]:
+        return False
+    
+    return True
+
+def remove_overlapping(models):
+    keep_models = []
+    for i in progress.bar(range(len(models)), label='Removing Overlapping...'):
+        m1 = models.pop()
+        overlapping = False
+        
+        for m2 in models:
+            
+            minpt1, maxpt1 = sirikata_bounds(m1.boundsInfo)
+            minpt1 *= m1.scale
+            minpt1 += numpy.array([m1.x, m1.y, m1.z], dtype=numpy.float32)
+            maxpt1 *= m1.scale
+            maxpt1 += numpy.array([m1.x, m1.y, m1.z], dtype=numpy.float32)
+            
+            minpt2, maxpt2 = sirikata_bounds(m2.boundsInfo)
+            minpt2 *= m2.scale
+            minpt2 += numpy.array([m2.x, m2.y, m2.z], dtype=numpy.float32)
+            maxpt2 *= m2.scale
+            maxpt2 += numpy.array([m2.x, m2.y, m2.z], dtype=numpy.float32)
+            
+            overlapping = overlapping or overlaps((minpt1, maxpt1), (minpt2, maxpt2))
+            
+        if not overlapping:
+            keep_models.append(m1)
+            
+    return keep_models
+
+def generate_residential_zone(centers, models, terrain, map, json_out):
+    houses = models['houses']
+    
+    # for testing
+    # houses = [h for h in houses if 'kittyvision/house11.dae' in h['full_path']]
+    # assert len(houses) == 1
+    
+    num_gen = 0
+    models = []
+    for x, y, z in iterate_poisson_samples(centers, map, 'Residential Buildings', 15, 1):
+        pt = numpy.array([x,y,z], dtype=numpy.float32)
+        pt = mapgen_coords_to_sirikata(pt, terrain)
+        
+        scale = random.uniform(4.0, 8.0)
+        
+        m = SceneModel(random.choice(houses)['full_path'],
+                       x=float(pt[0]),
+                       y=float(pt[1]),
+                       z=float(pt[2]),
+                       scale=scale,
+                       model_type='house')
+        models.append(m)
+    
+    models = remove_overlapping(models)
+    for m in models:            
+        json_out.append(m.to_json())
+        num_gen += 1
+                
+    print 'Generated (%d) Residential Buildings' % num_gen
+
+def generate_commercial_zone(centers, models, terrain, map, json_out):
+    commercial = models['commercial_buildings']
+    
+    # for testing
+    # commercial = [c for c in commercial if 'emily2e/models/cityimport.dae' in c['full_path']]
+    # assert len(commercial) == 1
+    
+    num_gen = 0
+    models = []
+    for x, y, z in iterate_poisson_samples(centers, map, 'Commercial Buildings', 20, 2):
+        pt = numpy.array([x,y,z], dtype=numpy.float32)
+        pt = mapgen_coords_to_sirikata(pt, terrain)
+        
+        scale = random.uniform(6.0, 10.0)
+        
+        m = SceneModel(random.choice(commercial)['full_path'],
+                       x=float(pt[0]),
+                       y=float(pt[1]),
+                       z=float(pt[2]),
+                       scale=scale,
+                       model_type='commercial')
+        models.append(m)
+    
+    models = remove_overlapping(models)
+    for m in models:            
+        json_out.append(m.to_json())
+        num_gen += 1
+                
+    print 'Generated (%d) Commercial Buildings' % num_gen
+
+def generate_houses_and_trees(models, terrain, map, json_out):
+    USABLE_BIOMES = {'SHRUBLAND', 'TEMPERATE_RAIN_FOREST', 'TEMPERATE_DECIDUOUS_FOREST',
+     'GRASSLAND', 'TROPICAL_RAIN_FOREST','TROPICAL_SEASONAL_FOREST'}
+    centers = []
+    for c in map.centers.itervalues():
+        if c.biome not in USABLE_BIOMES:
+            continue
+        road_edges = [e for e in c.edges if e.is_road and e.corner0 is not None and e.corner1 is not None]
+        if len(road_edges) == 2:
+            continue
+        centers.append(c)
+    
+    random.shuffle(centers)
+    
+    start_offset = 0
+    end_offset = 0
+    
+    start_offset = end_offset
+    end_offset += int(len(centers) * 0.1)
+    generate_sparse_forest(centers[start_offset:end_offset], models, terrain, map, json_out)
+    
+    start_offset = end_offset
+    end_offset += int(len(centers) * 0.1)
+    generate_dense_forest(centers[start_offset:end_offset], models, terrain, map, json_out)
+    
+    start_offset = end_offset
+    end_offset += int(len(centers) * 0.1)
+    generate_residential_zone(centers[start_offset:end_offset], models, terrain, map, json_out)
+    
+    start_offset = end_offset
+    end_offset += int(len(centers) * 0.1)
+    generate_commercial_zone(centers[start_offset:end_offset], models, terrain, map, json_out)
+    
+    
 def main():
     parser = OptionParser(usage="Usage: generate-scene.py -o scene map.xml",
                           description="Generates a JSON scene based on mapgen2 XML output, using meshes from open3dhub")
@@ -375,6 +631,7 @@ def main():
     print 'Generated (1) terrain object'
     json_out.append(terrain.to_json())
     
+    generate_houses_and_trees(models, terrain, map, json_out)
     generate_winter(models, terrain, map, json_out)
     generate_roads(models, terrain, map, json_out)
     generate_vehicles(models, terrain, map, json_out)
