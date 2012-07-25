@@ -43,3 +43,14 @@ Options:
   -o OUTFILE, --outfile=OUTFILE
                         write JSON scene to FILE
 ```
+
+scene-info.py
+=============
+```
+Usage: scene-info.py scene.json
+
+Prints information about a JSON scene file.
+
+Options:
+  -h, --help  show this help message and exit
+```

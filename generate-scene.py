@@ -11,19 +11,17 @@ import shelve
 from mapgen2 import MapGenXml
 from mapgen2 import Z_SCALE
 from optparse import OptionParser
-from meshtool.filters.print_filters.print_bounds import getBoundsInfo, v3dist
+from meshtool.filters.print_filters.print_bounds import v3dist
 from panda3d.core import Vec3, Quat
 from clint.textui import progress
 from collada.util import normalize_v3
-import poisson_disk
 
+import poisson_disk
+import cache
 import open3dhub
 
 TERRAIN_PATH = '/jterrace/terrain.dae/0'
 ROAD_PATH = '/kittyvision/street.dae/0'
-
-CACHE = '.cache'
-SHELF = shelve.open(CACHE)
 
 def v3mid(pt1, pt2):
     return numpy.array([(pt1[0] + pt2[0]) / 2.0,
@@ -33,11 +31,7 @@ def v3mid(pt1, pt2):
 
 def get_tag_type(tag):
     print 'Finding tag "%s"...' % tag,
-    tagkey = "TAG_" + str(tag)
-    if tagkey not in SHELF:
-        print 'getting list for', tag
-        SHELF[tagkey] = open3dhub.get_search_list('tags:"%s"' % tag)
-    L = SHELF[tagkey]
+    L = cache.get_tag(tag)
     print 'received %d' % len(L)
     return L
 
@@ -120,22 +114,14 @@ class SceneModel(object):
     
     def _get_metadata(self):
         if self._metadata is None:
-            key = 'METADATA_' + str(self.path)
-            if key in SHELF:
-                self._metadata = SHELF[key]
-            else:
-                self._load_mesh()
-                SHELF[key] = self._metadata
+            self._metadata = cache.get_metadata(self.path)
         return self._metadata
 
     metadata = property(_get_metadata)
     
     def _get_bounds_info(self):
         if self._boundsInfo is None:
-            pathkey = 'BOUNDS_' + str(self.path)
-            if pathkey not in SHELF:
-                SHELF[pathkey] = getBoundsInfo(self.mesh)
-            self._boundsInfo = SHELF[pathkey]
+            self._boundsInfo = cache.get_bounds(self.path)
         return self._boundsInfo
     
     boundsInfo = property(_get_bounds_info)
