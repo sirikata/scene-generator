@@ -14,7 +14,7 @@ def get_tag(tag):
 def get_bounds(path):
     pathkey = 'BOUNDS_' + str(path)
     if pathkey not in SHELF:
-        metadata, mesh = open3dhub.path_to_mesh(path, cache=True)
+        metadata, mesh = open3dhub.path_to_mesh(path)
         SHELF[pathkey] = getBoundsInfo(mesh)
     
     return SHELF[pathkey]
@@ -22,7 +22,7 @@ def get_bounds(path):
 def get_metadata(path):
     key = 'METADATA_' + str(path)
     if key not in SHELF:
-        metadata, mesh = open3dhub.path_to_mesh(path, cache=True)
+        metadata, mesh = open3dhub.path_to_mesh(path)
         SHELF[key] = metadata
     
     return SHELF[key]
