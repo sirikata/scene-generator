@@ -223,13 +223,32 @@ def get_single_metadata(path):
     return metadata
 
 _mesh_cache = {}
+def _make_aux_file_loader(metadata):
+
+    typedata = metadata['metadata']['types']['optimized']
+    subfile_map = {}
+    for subfile in typedata['subfiles']:
+        base_name = posixpath.basename(posixpath.split(subfile)[0])
+        subfile_map[base_name] = subfile
+
+    def aux_file_loader(fname):
+        base = posixpath.basename(fname)
+        if base not in subfile_map:
+            return None
+        path = subfile_map[base]
+        subhash = get_subfile_hash(path)
+        data = hashfetch(subhash)
+        return data
+
+    return aux_file_loader
+
 def path_to_mesh(path, cache=False):
     if path not in _mesh_cache:
         metadata = get_single_metadata(path)
         typedata = metadata['metadata']['types']['optimized']
         mesh_hash = typedata['hash']
         mesh_data = hashfetch(mesh_hash)
-        mesh = collada.Collada(StringIO(mesh_data))
+        mesh = collada.Collada(StringIO(mesh_data), aux_file_loader=_make_aux_file_loader(metadata))
         if not cache:
             return (metadata, mesh)
         _mesh_cache[path] = (metadata, mesh)

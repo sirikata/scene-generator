@@ -19,6 +19,7 @@ from collada.util import normalize_v3
 import poisson_disk
 import cache
 import open3dhub
+import scene
 
 TERRAIN_PATH = '/jterrace/terrain.dae/0'
 ROAD_PATH = '/kittyvision/street.dae/0'
@@ -59,111 +60,6 @@ def get_models():
     
     return model_types
 
-def sirikata_bounds(boundsInfo):
-    minpt, maxpt = boundsInfo['bounds']
-    minpt, maxpt = numpy.copy(minpt), numpy.copy(maxpt)
-    
-    center = boundsInfo['center']
-    center_distance = boundsInfo['center_farthest_distance']
-    
-    # center the bounding box
-    minpt -= center
-    maxpt -= center
-    
-    # bounding box is scaled by 1 / (distance from center to farthest point)
-    minpt /= center_distance
-    maxpt /= center_distance
-    
-    return (minpt, maxpt)
-
-def height_offset(boundsInfo):
-    minpt, maxpt = sirikata_bounds(boundsInfo)
-    height_range = (maxpt[2] - minpt[2])
-    return height_range / 2.0
-
-class SceneModel(object):
-    def __init__(self, path, x, y, z, scale, model_type,
-                 orient_x=0, orient_y=0, orient_z=0, orient_w=1):
-        self.path = path
-        
-        self.x = x
-        self.y = y
-        self.z = z
-        
-        self.scale = scale
-        self.model_type = model_type
-        
-        self.orient_x = orient_x
-        self.orient_y = orient_y
-        self.orient_z = orient_z
-        self.orient_w = orient_w
-        
-        self._metadata = None
-        self._mesh = None
-        self._boundsInfo = None
-        
-    def _load_mesh(self):
-        if self._mesh is None:
-            self._metadata, self._mesh = open3dhub.path_to_mesh(self.path, cache=True)
-        
-    def _get_mesh(self):
-        self._load_mesh()
-        return self._mesh
-    
-    mesh = property(_get_mesh)
-    
-    def _get_metadata(self):
-        if self._metadata is None:
-            self._metadata = cache.get_metadata(self.path)
-        return self._metadata
-
-    metadata = property(_get_metadata)
-    
-    def _get_bounds_info(self):
-        if self._boundsInfo is None:
-            self._boundsInfo = cache.get_bounds(self.path)
-        return self._boundsInfo
-    
-    boundsInfo = property(_get_bounds_info)
-    
-    center = property(lambda s: s.boundsInfo['center'])
-    
-    v3 = property(lambda s: numpy.array([s.x, s.y, s.z], dtype=numpy.float32))
-    
-    sirikata_uri = property(lambda s: 'meerkat:///' +
-                                        s.metadata['basepath'] + '/' +
-                                        'optimized' + '/' +
-                                        s.metadata['version'] + '/' + 
-                                        s.metadata['basename'])
-    def to_json(self):
-        z = self.z + height_offset(self.boundsInfo) * self.scale
-        
-        # below swaps from z-up to y-up
-        return {
-            'path': self.path,
-            'sirikata_uri': self.sirikata_uri,
-            'x': self.x,
-            'y': z,
-            'z': -1.0 * self.y,
-            'orient_x': self.orient_x,
-            'orient_y': self.orient_z,
-            'orient_z': -1.0 * self.orient_y,
-            'orient_w': self.orient_w,
-            'scale': self.scale,
-            'type': self.model_type,
-        }
-
-def mapgen_coords_to_sirikata(loc, terrain):
-    # mapgen starts at 0,0,0 as the corner, but terrain gets centered at 0,0,0
-    loc = loc - terrain.center
-    # scale the coordinates to the scaled coordinates of the terrain mesh
-    loc /= terrain.boundsInfo['center_farthest_distance']
-    # then scale back by the terrain's scale
-    loc *= terrain.scale
-    # adjust the height by how much the terrain is offset
-    loc[2] += height_offset(terrain.boundsInfo) * terrain.scale
-    return loc
-
 def normal_vector(a, b, c):
     direction = numpy.cross(b - a, c - a)
     normalize_v3(direction[None, :])
@@ -188,21 +84,21 @@ def generate_roads(models, terrain, map, json_out):
             end2 = v3mid(edge1, edge2)
             
             midpt = v3mid(end1, end2)
-            midpt = mapgen_coords_to_sirikata(midpt, terrain)
+            midpt = scene.mapgen_coords_to_sirikata(midpt, terrain)
             
-            kata_pt1 = mapgen_coords_to_sirikata(end1, terrain)
-            kata_pt2 = mapgen_coords_to_sirikata(end2, terrain)
+            kata_pt1 = scene.mapgen_coords_to_sirikata(end1, terrain)
+            kata_pt2 = scene.mapgen_coords_to_sirikata(end2, terrain)
             
             scale = v3dist(kata_pt1, kata_pt2) / 2
             
-            m = SceneModel(ROAD_PATH,
+            m = scene.SceneModel(ROAD_PATH,
                            x=float(midpt[0]),
                            y=float(midpt[1]),
                            z=float(midpt[2]),
                            scale=scale,
                            model_type='road')
             
-            kataboundmin, kataboundmax = sirikata_bounds(m.boundsInfo)
+            kataboundmin, kataboundmax = scene.sirikata_bounds(m.boundsInfo)
             scenemin = kataboundmin * scale + midpt
             scenemax = kataboundmax * scale + midpt
             xmid = (scenemax[0] - scenemin[0]) / 2.0 + scenemin[0]
@@ -223,8 +119,8 @@ def generate_roads(models, terrain, map, json_out):
             orig_up = q.getUp()
             orig_up.normalize()
             
-            edge1_kata = mapgen_coords_to_sirikata(edge1, terrain)
-            edge2_kata = mapgen_coords_to_sirikata(edge2, terrain)
+            edge1_kata = scene.mapgen_coords_to_sirikata(edge1, terrain)
+            edge2_kata = scene.mapgen_coords_to_sirikata(edge2, terrain)
             new_up = normal_vector(kata_pt1, edge1_kata, edge2_kata)
             new_up = Vec3(new_up[0], new_up[1], new_up[2])
             rotate_about = orig_up.cross(new_up)
@@ -247,7 +143,7 @@ def generate_roads(models, terrain, map, json_out):
     print 'Generated (%d) road objects' % numroads
 
 def generate_flying(models, terrain, map, json_out):
-    terrain_bounds = sirikata_bounds(terrain.boundsInfo)
+    terrain_bounds = scene.sirikata_bounds(terrain.boundsInfo)
     minpt, maxpt = terrain_bounds
     minpt *= terrain.scale
     maxpt *= terrain.scale
@@ -259,11 +155,11 @@ def generate_flying(models, terrain, map, json_out):
     centers = centers[:len(flying_models)]
     for center, flying_model in progress.bar(zip(centers, flying_models), label='Generating flying objects... '):
         center_pt = numpy.array([center.x, center.y, center.elevation * Z_SCALE], dtype=numpy.float32)
-        center_pt = mapgen_coords_to_sirikata(center_pt, terrain)
+        center_pt = scene.mapgen_coords_to_sirikata(center_pt, terrain)
 
         rand_height = random.uniform(center_pt[2], height_max) * 1.10
         
-        m = SceneModel(flying_model['full_path'],
+        m = scene.SceneModel(flying_model['full_path'],
                        x=float(center_pt[0]),
                        y=float(center_pt[1]),
                        z=rand_height,
@@ -286,10 +182,10 @@ def generate_boats(models, terrain, map, json_out):
     
     for center, boat_model in progress.bar(zip(centers, boats), label='Generating boats...'):
         center_pt = numpy.array([center.x, center.y, center.elevation * Z_SCALE], dtype=numpy.float32)
-        center_pt = mapgen_coords_to_sirikata(center_pt, terrain)
+        center_pt = scene.mapgen_coords_to_sirikata(center_pt, terrain)
         scale = random.uniform(5.0, 15.0)
         
-        m = SceneModel(boat_model['full_path'],
+        m = scene.SceneModel(boat_model['full_path'],
                        x=float(center_pt[0]),
                        y=float(center_pt[1]),
                        z=float(center_pt[2]) - scale * 2 * 0.05,
@@ -310,10 +206,10 @@ def generate_winter(models, terrain, map, json_out):
     
     for center, winter_model in progress.bar(zip(snow, winter), label='Generating winter objects...'):
         center_pt = numpy.array([center.x, center.y, center.elevation * Z_SCALE], dtype=numpy.float32)
-        center_pt = mapgen_coords_to_sirikata(center_pt, terrain)
+        center_pt = scene.mapgen_coords_to_sirikata(center_pt, terrain)
         scale = random.uniform(3.0, 10.0)
         
-        m = SceneModel(winter_model['full_path'],
+        m = scene.SceneModel(winter_model['full_path'],
                        x=float(center_pt[0]),
                        y=float(center_pt[1]),
                        z=float(center_pt[2]),
@@ -336,7 +232,7 @@ def generate_vehicles(models, terrain, map, json_out):
         
         scale = random.uniform(1.0, 3.0)
         
-        m = SceneModel(vehicle_model['full_path'],
+        m = scene.SceneModel(vehicle_model['full_path'],
                        x=float(road_pt[0]),
                        y=float(road_pt[1]),
                        z=float(road_pt[2]),
@@ -423,11 +319,11 @@ def generate_forest(centers, models, terrain, map, json_out, name, radius, num_s
     num_gen = 0 
     for x, y, z in iterate_poisson_samples(centers, map, name, radius, num_samples):
         pt = numpy.array([x,y,z], dtype=numpy.float32)
-        pt = mapgen_coords_to_sirikata(pt, terrain)
+        pt = scene.mapgen_coords_to_sirikata(pt, terrain)
         
         scale = random.uniform(3.0, 10.0)
         
-        m = SceneModel(random.choice(trees)['full_path'],
+        m = scene.SceneModel(random.choice(trees)['full_path'],
                        x=float(pt[0]),
                        y=float(pt[1]),
                        z=float(pt[2]),
@@ -476,13 +372,13 @@ def remove_overlapping(models):
         
         for m2 in models:
             
-            minpt1, maxpt1 = sirikata_bounds(m1.boundsInfo)
+            minpt1, maxpt1 = scene.sirikata_bounds(m1.boundsInfo)
             minpt1 *= m1.scale
             minpt1 += numpy.array([m1.x, m1.y, m1.z], dtype=numpy.float32)
             maxpt1 *= m1.scale
             maxpt1 += numpy.array([m1.x, m1.y, m1.z], dtype=numpy.float32)
             
-            minpt2, maxpt2 = sirikata_bounds(m2.boundsInfo)
+            minpt2, maxpt2 = scene.sirikata_bounds(m2.boundsInfo)
             minpt2 *= m2.scale
             minpt2 += numpy.array([m2.x, m2.y, m2.z], dtype=numpy.float32)
             maxpt2 *= m2.scale
@@ -506,11 +402,11 @@ def generate_residential_zone(centers, models, terrain, map, json_out):
     models = []
     for x, y, z in iterate_poisson_samples(centers, map, 'Residential Buildings', 15, 1):
         pt = numpy.array([x,y,z], dtype=numpy.float32)
-        pt = mapgen_coords_to_sirikata(pt, terrain)
+        pt = scene.mapgen_coords_to_sirikata(pt, terrain)
         
         scale = random.uniform(4.0, 8.0)
         
-        m = SceneModel(random.choice(houses)['full_path'],
+        m = scene.SceneModel(random.choice(houses)['full_path'],
                        x=float(pt[0]),
                        y=float(pt[1]),
                        z=float(pt[2]),
@@ -536,11 +432,11 @@ def generate_commercial_zone(centers, models, terrain, map, json_out):
     models = []
     for x, y, z in iterate_poisson_samples(centers, map, 'Commercial Buildings', 20, 2):
         pt = numpy.array([x,y,z], dtype=numpy.float32)
-        pt = mapgen_coords_to_sirikata(pt, terrain)
+        pt = scene.mapgen_coords_to_sirikata(pt, terrain)
         
         scale = random.uniform(6.0, 10.0)
         
-        m = SceneModel(random.choice(commercial)['full_path'],
+        m = scene.SceneModel(random.choice(commercial)['full_path'],
                        x=float(pt[0]),
                        y=float(pt[1]),
                        z=float(pt[2]),
@@ -612,7 +508,7 @@ def main():
     map = MapGenXml(fname)
     models = get_models()
     
-    terrain = SceneModel(TERRAIN_PATH, x=0, y=0, z=0, scale=1000, model_type='terrain')
+    terrain = scene.SceneModel(TERRAIN_PATH, x=0, y=0, z=0, scale=1000, model_type='terrain')
     json_out = []
     print 'Generated (1) terrain object'
     json_out.append(terrain.to_json())
