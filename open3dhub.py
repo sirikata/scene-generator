@@ -29,6 +29,15 @@ PANDA3D = False
 
 PROGRESSIVE_CHUNK_SIZE = 2 * 1024 * 1024 # 2 MB
 
+# blacklist some models that are TOO BIG and make cassandra die because thrift doesn't support streaming
+BLACKLIST = set(['/kittyvision/tree/straight.dae/0',
+                 '/kittyvision/tree/willow.dae/0',
+                 '/kittyvision/tree/leaning.dae/0',
+                 '/kittyvision/tree/leafy.dae/0',
+                 '/kittyvision/tree/jaccaranda.dae/0',
+                 '/kittyvision/tree/densemaple.dae/0',
+                 '/kittyvision/tree/mango.dae/0'])
+
 CURDIR = os.path.dirname(__file__)
 TEMPDIR = os.path.join(CURDIR, '.temp_models')
 
@@ -105,7 +114,10 @@ def get_search_list(q):
                                   'rows': 100}
         response = json_fetch(to_search)
         
-        all_items.extend(response['content_items'])
+        for item in response['content_items']:
+            if item['full_path'] in BLACKLIST:
+                continue
+            all_items.append(item)
         
         try:
             start = int(response['next_start'])
