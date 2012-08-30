@@ -89,7 +89,7 @@ def main():
                 total_base_tris += min(progressive['metadata']['num_triangles'], 40000)
                 total_base_mesh_bytes[m['path']] = progressive['size_gzip']
                 total_base_stream_bytes[m['path']] = progressive.get('progressive_stream_size_gzip', 0)
-                total_full_tris += progressive['metadata']['num_triangles'] + progressive['progressive_stream_num_triangles']
+                total_full_tris += progressive['metadata']['num_triangles']
                 
                 if progressive['metadata']['num_triangles'] > 40000:
                     too_big.add(m['path'])
