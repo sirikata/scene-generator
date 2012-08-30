@@ -56,14 +56,20 @@ def main():
     total_triangles = 0
     total_draw_calls = 0
     total_ram_cache = {}
+    total_mesh_size = {}
+    total_texture_size = {}
     
     total_base_tris = 0
     base_ram_cache = {}
     total_base_draw_calls = 0
+    total_base_mesh_bytes = {}
+    total_base_texture_bytes = {}
+    total_base_stream_bytes = {}
     
     total_full_tris = 0
     full_ram_cache = {}
     total_full_draw_calls = 0
+    total_texture_sum = {}
     
     missing_progressive = set()
     missing_metadata = set()
@@ -81,6 +87,8 @@ def main():
                 missing_metadata.add(m['path'])
             else:
                 total_base_tris += min(progressive['metadata']['num_triangles'], 40000)
+                total_base_mesh_bytes[m['path']] = progressive['size_gzip']
+                total_base_stream_bytes[m['path']] = progressive.get('progressive_stream_size_gzip', 0)
                 total_full_tris += progressive['metadata']['num_triangles'] + progressive['progressive_stream_num_triangles']
                 
                 if progressive['metadata']['num_triangles'] > 40000:
@@ -88,17 +96,22 @@ def main():
                 
                 for mapname, mapinfo in progressive['mipmaps'].iteritems():
                     byte_ranges = mapinfo['byte_ranges']
+                    byte_size = 0
                     for levelinfo in byte_ranges:
                         width, height = levelinfo['width'], levelinfo['height']
                         if width >= 128 or height >= 128:
                             ram_size = width * height * 4
+                            byte_size = levelinfo['length']
                             break
                     base_ram_cache[m['path']] = ram_size
+                    total_base_texture_bytes[m['path']] = byte_size
                     
                     if len(byte_ranges) > 0:
                         full_res = byte_ranges[-1]
                         width, height = full_res['width'], full_res['height']
                         full_ram_cache[m['path']] = width * height * 4
+                
+                    total_texture_sum[m['path']] = sum([l['length'] for l in byte_ranges])
                 
                 total_base_draw_calls += progressive['metadata']['num_draw_calls']
                 total_full_draw_calls += progressive['metadata']['num_draw_calls']
@@ -107,10 +120,18 @@ def main():
         total_triangles += optimized['metadata']['num_triangles']
         total_ram_cache[m['path']] = optimized['metadata']['texture_ram_usage']
         total_draw_calls += optimized['metadata']['num_draw_calls']
+        total_mesh_size[m['path']] = optimized['size_gzip']
+        total_texture_size[m['path']] = sum(optimized['subfile_sizes_gzip'].values())
     
     total_ram = sum(total_ram_cache.values())
     total_base_ram = sum(base_ram_cache.values())
     total_full_ram = sum(full_ram_cache.values())
+    total_mesh_size = sum(total_mesh_size.values())
+    total_texture_size = sum(total_texture_size.values())
+    total_base_mesh_bytes = sum(total_base_mesh_bytes.values())
+    total_base_texture_bytes = sum(total_base_texture_bytes.values())
+    total_base_stream_bytes = sum(total_base_stream_bytes.values())
+    total_texture_sum = sum(total_texture_sum.values())
     
     for m in missing_progressive:
         if missing_to is not None:
@@ -122,7 +143,7 @@ def main():
     
     for m in too_big:
         metadata = cache.get_metadata(m)
-        puts_err("Warning '%s' too big at %s triangles" % (m, pretty(metadata['metadata']['types']['progressive']['metadata']['num_triangles'])))
+        puts_err("Warning '%s' too big at %s triangles %s" % (m, pretty(metadata['metadata']['types']['progressive']['metadata']['num_triangles']), pretty(metadata['metadata']['types']['progressive']['progressive_stream_num_triangles'])))
     if len(too_big) > 0:
         puts()
     
@@ -140,6 +161,9 @@ def main():
         puts('Triangles: %s' % pretty(total_triangles))
         puts('Texture RAM: %s' % humanize_bytes(total_ram))
         puts('Draw Calls: %s' % pretty(total_draw_calls))
+        puts('Mesh Download Size: %s' % humanize_bytes(total_mesh_size))
+        puts('Textures Download Size: %s' % humanize_bytes(total_texture_size))
+        puts('Total Download Size: %s' % humanize_bytes(total_mesh_size + total_texture_size))
         
     puts()
     puts("Type 'progressive' base mesh")
@@ -147,6 +171,9 @@ def main():
         puts('Triangles: %s' % pretty(total_base_tris))
         puts('Texture RAM: %s' % humanize_bytes(total_base_ram))
         puts('Draw Calls: %s' % pretty(total_base_draw_calls))
+        puts('Base Mesh Download Size: %s' % humanize_bytes(total_base_mesh_bytes))
+        puts('Base Texture Download Size: %s' % humanize_bytes(total_base_texture_bytes))
+        puts('Total Base Download Size: %s' % humanize_bytes(total_base_mesh_bytes + total_base_texture_bytes))
         
     puts()
     puts("Type 'progressive' full quality")
@@ -154,6 +181,9 @@ def main():
         puts('Triangles: %s' % pretty(total_full_tris))
         puts('Texture RAM: %s' % humanize_bytes(total_full_ram))
         puts('Draw Calls: %s' % pretty(total_full_draw_calls))
+        puts('Progressive Stream Download Size: %s' % humanize_bytes(total_base_stream_bytes))
+        puts('All Textures Download Size: %s' % humanize_bytes(total_texture_sum))
+        puts('Total Download Size : %s' % humanize_bytes(total_base_mesh_bytes + total_base_stream_bytes + total_texture_sum))
 
 if __name__ == '__main__':
     main()
